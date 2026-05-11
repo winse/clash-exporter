@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: clash
+    orgId: 1
+    folder: Clash
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards

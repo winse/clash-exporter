@@ -1,0 +1,78 @@
+# 一键栈：clash-exporter + Prometheus + Grafana
+# 复制 .env.example 为 .env 后按需改 CLASH_HOST（宿主机上 Clash 外控地址）。
+#
+# 网络（local）：
+# - 三服务在同一 bridge 网络，Prometheus 用服务名 clash-exporter:2112 抓取。
+# - Exporter 连宿主机 Clash：默认 CLASH_HOST=host.docker.internal:9090；
+#   Linux 已加 extra_hosts: host.docker.internal -> host-gateway。
+# - 若 Clash 只监听 127.0.0.1，容器可能访问失败，请让外控监听 0.0.0.0 或改用宿主机 IP。
+#
+# Windows（Exporter 在宿主机、监控栈在容器）：
+#   1. 本机 `node server.mjs`（或 npm start）跑 clash-exporter，CLASH_HOST 指向本机 Clash 外控（如 127.0.0.1:9090）。
+#   2. 仅启动 Prometheus + Grafana，并让 Prometheus 抓取 host.docker.internal:2112：
+#        docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d
+#      合并文件会给 clash-exporter 加 profile，容器版 exporter 不会启动；见 docker-compose.windows.yml。
+
+networks:
+  monitoring:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+services:
+  clash-exporter:
+    build: .
+    image: clash-exporter:local
+    container_name: clash-exporter
+    networks: [monitoring]
+    ports:
+      - "${EXPORTER_PORT:-2112}:2112"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      CLASH_HOST: ${CLASH_HOST:-host.docker.internal:9090}
+      CLASH_TOKEN: ${CLASH_TOKEN:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2112/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: prometheus
+    networks: [monitoring]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      # Windows 宿主机跑 exporter 时用 PROMETHEUS_CONFIG_FILE 指向 prometheus.windows.yml（见 .env.windows.example）
+      - ${PROMETHEUS_CONFIG_FILE:-./deploy/prometheus/prometheus.yml}:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: grafana
+    networks: [monitoring]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped

@@ -1,0 +1,21 @@
+# 与 docker-compose.yml 合并：clash-exporter 在 Windows 宿主机运行，Prometheus / Grafana 仍在容器。
+#
+# 用法（在项目目录）：
+#   1. 合并/复制 .env.windows.example 到 .env，或启动时：docker compose --env-file .env.windows.example ...
+#   2. 宿主机先起 exporter（例如 npm start），CLASH_HOST=127.0.0.1:9090（按你本机 Clash 外控改）。
+#   3. 启动：
+#        docker compose -f docker-compose.yml -f docker-compose.windows.yml --env-file .env.windows.example up -d
+#      若已把变量写入 .env，可省略 --env-file。
+#
+# 原理：本文件给 clash-exporter 增加未启用的 profile，合并后不会启动容器版 exporter；
+#       PROMETHEUS_CONFIG_FILE 指向 prometheus.windows.yml，使 Prometheus 抓取 host.docker.internal:2112。
+#       Docker Desktop 已提供 host.docker.internal；若环境异常，prometheus 上已加 extra_hosts 兜底。
+
+services:
+  clash-exporter:
+    profiles:
+      - __disabled_use_host_exporter_on_windows__
+
+  prometheus:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

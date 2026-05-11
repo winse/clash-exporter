@@ -1,0 +1,15 @@
+{
+  "name": "clash-exporter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Prometheus exporter for Clash / Clash Meta: clash_* metrics via HTTP or Windows named pipe.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "prom-client": "^15.1.3",
+    "tldts": "^6.1.86",
+    "ws": "^8.18.0"
+  }
+}
