@@ -5,9 +5,8 @@
  * Legacy if unset: NYKMA_PROXY_ENABLE+NYKMA_PROXY_CONNECTION_DETAIL → full; CLASH_ENABLE_PER_CONN → compact.
  *
  * Env: PORT, CLASH_HOST, CLASH_TOKEN, CLASH_PIPE, COLLECT_DEST
- * Extended: METRIC_PREFIX, CLASH_ENABLE_SPEED, CLASH_ENABLE_NODE_AGG,
- *   CLASH_ENABLE_DEST_AGG, CLASH_ENABLE_PROXY_LATENCY, CLASH_LATENCY_INTERVAL_MS,
- *   CLASH_PROXIES_POLL_MS
+ * Extended: METRIC_PREFIX, CLASH_ENABLE_SPEED, CLASH_ENABLE_PROXY_LATENCY,
+ *   CLASH_LATENCY_INTERVAL_MS, CLASH_PROXIES_POLL_MS
  * clash_traffic_by_*: CLASH_ENABLE_TRAFFIC_BY_DIMS, CLASH_TRAFFIC_BY_SKIP_DIRECT,
  *   CLASH_TRAFFIC_BY_LABEL_IDLE_MS, CLASH_TRAFFIC_BY_LABEL_CLEANUP_MS
  * `full` / `{prefix}_connection_*` 的标签 `name`: NYKMA_PROXY_NAME (默认 default)
@@ -30,8 +29,6 @@ const COLLECT_DEST = process.env.COLLECT_DEST !== 'false'
 const METRIC_PREFIX = process.env.METRIC_PREFIX || 'clash'
 
 const CLASH_ENABLE_SPEED = process.env.CLASH_ENABLE_SPEED !== 'false'
-const CLASH_ENABLE_NODE = process.env.CLASH_ENABLE_NODE_AGG !== 'false'
-const CLASH_ENABLE_DEST = process.env.CLASH_ENABLE_DEST_AGG !== 'false'
 const CLASH_ENABLE_LATENCY =
   process.env.CLASH_ENABLE_PROXY_LATENCY === 'true' ||
   process.env.CLASH_ENABLE_PROXY_DELAY === 'true'
@@ -144,8 +141,6 @@ const extended = createClashExtendedMetrics(register, {
   prefix: METRIC_PREFIX,
   api,
   enableSpeed: CLASH_ENABLE_SPEED,
-  enableAggNode: CLASH_ENABLE_NODE,
-  enableAggDest: CLASH_ENABLE_DEST,
   connectionDetailMode: CONNECTION_DETAIL_MODE,
   fullDetailInstanceName: NYKMA_PROXY_NAME,
   enableProxyLatency: CLASH_ENABLE_LATENCY,

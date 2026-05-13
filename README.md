@@ -136,11 +136,9 @@ docker compose up -d
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `CLASH_ENABLE_SPEED` | 开 | `false` 关闭：`{prefix}_traffic_*_speed_bytes`（需 `/traffic` WS） |
-| `CLASH_ENABLE_NODE_AGG` | 开 | `false` 关闭：按出站节点聚合的字节 Gauge |
-| `CLASH_ENABLE_DEST_AGG` | 开 | `false` 关闭：按「目的地 + 出站节点」聚合 |
 | `CLASH_ENABLE_PROXY_LATENCY` | 关 | 须为 `true` 启用（也可用 `CLASH_ENABLE_PROXY_DELAY`）：`{prefix}_proxy_latency_ms`、`_proxy_available` |
 | `CLASH_LATENCY_INTERVAL_MS` | `60000` | 延迟探测周期；单次请求约 5s 超时 |
-| `CLASH_PROXIES_POLL_MS` | `1000` | 刷新 `/proxies` 的间隔（用于解析真实出站、延迟列表） |
+| `CLASH_PROXIES_POLL_MS` | `1000` | 刷新 `/proxies` 的间隔（`compact` 下解析真实出站，`PROXY_LATENCY` 下列代理探测） |
 
 **每条连接的明细档位**（互斥：**`default`** | **`compact`** | **`full`**）
 
@@ -186,12 +184,10 @@ docker compose up -d
 | 指标 | 默认名 | 条件 | 类型 | 标签 |
 |------|--------|------|------|------|
 | 上传/下载速率 | `…traffic_upload_speed_bytes` / `…download_speed_bytes` | `CLASH_ENABLE_SPEED` 未关 | Gauge | — |
-| 按节点累计 | `…connection_{upload,download}_bytes_by_node` | 节点聚合未关 | Gauge | `outbound_node` |
-| 按目的地+节点 | `…connection_{upload,download}_bytes_by_destination` | 目的地聚合未关 | Gauge | `destination`, `outbound_node` |
 | 按连接明细 | `…connection_{upload,download}_bytes` | `CONNECTION_DETAIL_MODE=compact`（标签稀疏）或 `full`（标签尽量填满） | Gauge | 名称相同；标签键集合相同，见下表 |
 | 延迟 / 可用 | `…proxy_latency_ms` / `…proxy_available` | `CLASH_ENABLE_PROXY_LATENCY=true` | Gauge | `proxy_name` |
 
-速率来自 `/traffic` 的 `up`、`down` 字段（一般为当前速率，字节/秒；具体以 Clash 核心版本为准）。节点/目的地/按连接明细等 Gauge 表示**当前仍活跃连接**在各分组上的上传、下载字节合计。
+速率来自 `/traffic` 的 `up`、`down` 字段（一般为当前速率，字节/秒；具体以 Clash 核心版本为准）。按连接明细的 Gauge 表示**当前仍活跃连接**的上传、下载累计字节（`compact` 为按稀疏标签聚合后的分组合计）。按目的地/出口的时段流量请用 **`clash_network_traffic_bytes_total`** 的 `increase` / `rate`。
 
 **`{prefix}_connection_{upload,download}_bytes` 标签键（顺序固定）**  
 `compact`：主要使用 `name`、`source_ip`、`host` 或 `destination_ip`、`chain`（出站）、`connection_id` 等常为空；`full`：按连接与链上每一跳填充/metadata 尽力填写。
