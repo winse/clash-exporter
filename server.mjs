@@ -1,7 +1,7 @@
 /**
  * Clash / Clash Meta Prometheus exporter — clash_* session metrics, optional extended series.
  *
- * CONNECTION_DETAIL_MODE: default | compact | full (aliases: off→default, nykma→full).
+ * CONNECTION_DETAIL_MODE: default | compact | full (alias: off→default).
  * Legacy if unset: NYKMA_PROXY_ENABLE+NYKMA_PROXY_CONNECTION_DETAIL → full; CLASH_ENABLE_PER_CONN → compact.
  *
  * Env: PORT, CLASH_HOST, CLASH_TOKEN, CLASH_PIPE, COLLECT_DEST

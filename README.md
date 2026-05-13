@@ -2,19 +2,22 @@
 
 订阅 **Clash / Clash Meta** 控制器的 `/connections`（及可选 `/traffic`、`/proxies`），在 **`/metrics`** 输出 Prometheus 指标。支持 **Windows 命名管道**（不设 `CLASH_HOST` 时）或 **TCP**（`host:port`）。
 
-**路径**：仓库内示例目录当前为 `examples/mihomo-exporter`；若你已把它重命名为 `examples/clash-exporter`，下文中的 `cd` 路径请相应替换。默认管道路径中的 `verge-mihomo` 来自 **Clash Verge** 实际管道名，与导出器命名无关。
+代码与 `package.json`、`Dockerfile`、`docker-compose.yml` 均位于**本仓库根目录**。默认管道路径中的 `verge-mihomo` 来自 **Clash Verge** 实际管道名，与导出器命名无关。
 
 ---
 
 ## 使用
 
-**依赖**：Node.js 18+  
+**依赖**：Node.js 18+（`Dockerfile` 使用 Node 22 Alpine）
+
+在仓库根目录：
 
 ```bash
-cd examples/mihomo-exporter
 npm install
 npm start
 ```
+
+Windows 也可双击 **`start-exporter.bat`**（等同在该目录执行 `npm start`）。
 
 默认监听 **`http://127.0.0.1:2112`**。
 
@@ -23,9 +26,10 @@ npm start
 | `/metrics` | Prometheus 文本指标 |
 | `/`、`/health` | 返回 `ok` |
 
-**管道（如 Clash Verge）**：不设 `CLASH_HOST`，默认管道路径 `\\.\pipe\verge-mihomo`（由客户端决定），请求头使用 `Host: clash-verge`。
+**管道（如 Clash Verge）**：不设 `CLASH_HOST`，默认管道路径 `\\.\pipe\verge-mihomo`（以实际客户端为准），请求头使用 `Host: clash-verge`。
 
 ```powershell
+cd E:\path\to\clash-exporter   # 换成你的仓库路径
 $env:CLASH_PIPE = "\\.\pipe\verge-mihomo"
 node server.mjs
 ```
@@ -52,14 +56,13 @@ scrape_configs:
 
 ## Docker
 
-导出器镜像为 **Node 22 Alpine**，进程监听 **`2112`**，进程内健康检查 **`/health`**。
-
-**工作目录**：始终在 `examples/mihomo-exporter` 下执行。
+导出器镜像为 **Node 22 Alpine**，进程监听 **`2112`**，镜像内健康检查请求 **`/health`**。
 
 ### 仅构建 / 单容器运行
 
+在仓库根目录：
+
 ```bash
-cd examples/mihomo-exporter
 docker build -t clash-exporter:latest .
 docker run --rm -p 2112:2112 \
   --add-host=host.docker.internal:host-gateway \
@@ -68,9 +71,9 @@ docker run --rm -p 2112:2112 \
   clash-exporter:latest
 ```
 
-### 一键栈：Exporter + Prometheus + Grafana（推荐 local）
+### 一键栈：Exporter + Prometheus + Grafana（Linux / macOS / Docker Desktop，Exporter 在容器内）
 
-`docker-compose.yml` 会起三个服务，同一 **bridge 网络 `monitoring`**：
+`docker-compose.yml` 会起三个服务，同一 **bridge 网络 `monitoring`**。镜像版本以 Compose 为准（当前示例：`prom/prometheus:v2.55.1`、`grafana/grafana:11.3.0`）。
 
 | 服务 | 容器内地址 | 宿主机端口（默认） |
 |------|------------|-------------------|
@@ -78,10 +81,9 @@ docker run --rm -p 2112:2112 \
 | Prometheus | `prometheus:9090` | `${PROMETHEUS_PORT:-9090}` |
 | Grafana | `http://grafana:3000` | `${GRAFANA_PORT:-3000}` |
 
-Prometheus 已配置抓取 **`clash-exporter:2112`**（走 Docker DNS，**不要**写 `localhost:2112`）。Grafana 已 **provisioning** 数据源 `Prometheus` → `http://prometheus:9090`，并挂载内置看板 **Clash exporter overview**（目录 **Dashboards → Clash**）。
+Prometheus 默认配置抓取 **`clash-exporter:2112`**（走 Docker DNS，**不要**写 `localhost:2112`）。Grafana 已 **provisioning** 数据源 `Prometheus` → `http://prometheus:9090`，并挂载内置看板 **Clash exporter overview**（目录 **Dashboards → Clash**）。
 
 ```bash
-cd examples/mihomo-exporter
 copy .env.example .env   # Windows；Linux/macOS: cp .env.example .env
 # 编辑 .env：至少确认 CLASH_HOST 指向宿主机上 Clash 外控
 docker compose up -d
@@ -91,10 +93,26 @@ docker compose up -d
 
 停止：`docker compose down`（数据卷 `prometheus_data` / `grafana_data` 会保留；若需清空可加 `-v`）。
 
+### Windows：Exporter 在宿主机，Prometheus / Grafana 在容器（推荐）
+
+若 Clash 与 Exporter 跑在 **Windows 本机**（管道或 `127.0.0.1:9090`），容器内的 Exporter 无法使用命名管道，可：
+
+1. 在本机仓库目录执行 **`npm start`**，并设置 `CLASH_HOST=127.0.0.1:9090`（或仅用管道模式则不要设 `CLASH_HOST`）。
+2. 复制 **`.env.windows.example`** 中的变量到 `.env`（关键是 `PROMETHEUS_CONFIG_FILE=./deploy/prometheus/prometheus.windows.yml`），使 Prometheus 抓取 **`host.docker.internal:2112`**。
+3. 合并 Compose 启动监控栈（**不会**拉起容器版 clash-exporter；该服务被加上了未启用的 profile）：
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d
+```
+
+也可使用仓库中的 **`start-docker-stack.bat`**（前台运行；若需后台请改为上述命令并加 `-d`）。
+
+---
+
 #### Local 网络注意（必读）
 
 1. **Exporter → 宿主机 Clash**  
-   - 默认 `CLASH_HOST=host.docker.internal:9090`。Compose 已为 Linux 加上 `extra_hosts: host.docker.internal:host-gateway`。  
+   - 全容器场景默认 `CLASH_HOST=host.docker.internal:9090`。Compose 已为 Linux 加上 `extra_hosts: host.docker.internal:host-gateway`。  
    - **Docker Desktop（Windows/macOS）** 一般可直接用。  
    - **纯 Linux**：若仍解析失败，把 `CLASH_HOST` 改成宿主机 **局域网 IP**（如 `192.168.x.x:9090`），或确认 Docker 已支持 `host-gateway`。
 
@@ -108,7 +126,9 @@ docker compose up -d
    容器内 **不能用 Windows 命名管道** 连桌面客户端；Docker 场景一律 **TCP 外控** + `CLASH_HOST`。其余环境变量仍可通过 `.env` / `environment` 传入（与下文表格一致）。
 
 配置文件位置：
-- `deploy/prometheus/prometheus.yml` — 抓取与全局 `scrape_interval`
+
+- `deploy/prometheus/prometheus.yml` — 全容器栈下的抓取与全局 `scrape_interval`
+- `deploy/prometheus/prometheus.windows.yml` — Windows 宿主机 Exporter 时，Prometheus 抓取 `host.docker.internal:2112`
 - `deploy/grafana/provisioning/` — 数据源与看板加载
 - `deploy/grafana/dashboards/clash-dashboard.json` — 示例看板
 
@@ -145,7 +165,7 @@ docker compose up -d
 | 变量 | 说明 |
 |------|------|
 | `CONNECTION_DETAIL_MODE` | **推荐**：`default` 不按连接暴露明细；`compact` / `full` 使用**同一对指标** `{prefix}_connection_upload_bytes`、`_download_bytes`（默认即 `clash_*`），**同一套标签名**；`compact` 只在少数标签上填值、其余为空，`full` 尽量填全（高基数）。 |
-| 别名 | `off` 等价 `default`；`nykma` 等价 `full`。非法值视为未设置，走下方 legacy。 |
+| 别名 | 仅 **`off`** 等价 **`default`**。其它无法识别的取值视为**未设置**，走下方 legacy。 |
 | 未设置 `CONNECTION_DETAIL_MODE`（或无效）时 | `NYKMA_PROXY_ENABLE=true` 且 `NYKMA_PROXY_CONNECTION_DETAIL=true` → **`full`**；否则 `CLASH_ENABLE_PER_CONN=true` → **`compact`**；否则 **`default`**。 |
 | | 若 NYKMA 与 `CLASH_ENABLE_PER_CONN` 两套 legacy 同时为 true，stderr 提示并采用 **`full`**。 |
 | `NYKMA_PROXY_NAME` | **`full`** 模式下标签 `name`；默认 `default`。 |
