@@ -1,23 +1,39 @@
 /**
- * Clash / Clash Meta Prometheus exporter — clash_* session metrics, optional extended series.
+ * Clash / Clash Meta Prometheus exporter — clash_* session metrics + optional extended series.
  *
- * CONNECTION_DETAIL_MODE: default | compact | full (alias: off→default).
- * Legacy if unset: NYKMA_PROXY_ENABLE+NYKMA_PROXY_CONNECTION_DETAIL → full; CLASH_ENABLE_PER_CONN → compact.
+ * Startup: block until GET /version succeeds (controller ready). While waiting,
+ * exponential backoff — press Enter when stdin is a TTY to retry immediately — then HTTP + WS.
+ * clash_info: from /version; refreshed again on each /connections WS open.
+ * clash_* on /connections stream.
  *
  * Env: PORT, CLASH_HOST, CLASH_TOKEN, CLASH_PIPE, COLLECT_DEST
- * Extended: METRIC_PREFIX, CLASH_ENABLE_SPEED, CLASH_ENABLE_PROXY_LATENCY,
- *   CLASH_LATENCY_INTERVAL_MS, CLASH_PROXIES_POLL_MS
- * clash_traffic_by_*: CLASH_ENABLE_TRAFFIC_BY_DIMS, CLASH_TRAFFIC_BY_SKIP_DIRECT,
- *   CLASH_TRAFFIC_BY_LABEL_IDLE_MS, CLASH_TRAFFIC_BY_LABEL_CLEANUP_MS
- * `full` / `{prefix}_connection_*` 的标签 `name`: NYKMA_PROXY_NAME (默认 default)
+ * Extended: METRIC_PREFIX, CLASH_ENABLE_SPEED, CLASH_ENABLE_PROXY_LATENCY/_DELAY,
+ *   CLASH_LATENCY_INTERVAL_MS
  */
 import http from 'node:http'
 import process from 'node:process'
+import readline from 'node:readline'
 
 import client from 'prom-client'
 
 import { createApiClient } from './lib/api-client.mjs'
 import { createClashExtendedMetrics } from './lib/clash-extended.mjs'
+
+function logErr(...args) {
+  console.error(`[${new Date().toISOString()}]`, ...args)
+}
+
+async function sleepBackoffOrWakeHint(totalMs, shouldWakeNow) {
+  const tickMs = 200
+  let left = totalMs
+  while (left > 0) {
+    if (shouldWakeNow()) return true
+    const stepMs = Math.min(tickMs, left)
+    await new Promise((r) => setTimeout(r, stepMs))
+    left -= stepMs
+  }
+  return false
+}
 
 const PORT = Number(process.env.PORT) || 2112
 const CLASH_HOST = process.env.CLASH_HOST || ''
@@ -34,51 +50,6 @@ const CLASH_ENABLE_LATENCY =
   process.env.CLASH_ENABLE_PROXY_DELAY === 'true'
 const CLASH_LATENCY_MS =
   Number(process.env.CLASH_LATENCY_INTERVAL_MS) || 60_000
-const CLASH_PROXIES_MS =
-  Number(process.env.CLASH_PROXIES_POLL_MS) || 1000
-
-const ENABLE_TRAFFIC_BY_DIMS =
-  process.env.CLASH_ENABLE_TRAFFIC_BY_DIMS !== 'false'
-const TRAFFIC_BY_SKIP_DIRECT =
-  process.env.CLASH_TRAFFIC_BY_SKIP_DIRECT !== 'false'
-const TRAFFIC_BY_LABEL_IDLE_MS =
-  Number(process.env.CLASH_TRAFFIC_BY_LABEL_IDLE_MS) || 3_600_000
-const TRAFFIC_BY_LABEL_CLEANUP_MS =
-  Number(process.env.CLASH_TRAFFIC_BY_LABEL_CLEANUP_MS) || 60_000
-
-const NYKMA_PROXY_NAME =
-  process.env.NYKMA_PROXY_NAME ||
-  process.env.PROXY_EXPORTER_NAME ||
-  'default'
-
-function normalizeConnectionDetailMode(value) {
-  const raw = String(value ?? '').trim().toLowerCase()
-  if (!raw) return null
-  if (raw === 'default' || raw === 'compact' || raw === 'full') return raw
-  if (raw === 'off') return 'default'
-  return null
-}
-
-function resolveConnectionDetailMode() {
-  const explicit = normalizeConnectionDetailMode(process.env.CONNECTION_DETAIL_MODE)
-  if (explicit) return explicit
-
-  const fullLegacy =
-    process.env.NYKMA_PROXY_ENABLE === 'true' &&
-    process.env.NYKMA_PROXY_CONNECTION_DETAIL === 'true'
-  const compactLegacy = process.env.CLASH_ENABLE_PER_CONN === 'true'
-
-  if (fullLegacy && compactLegacy) {
-    console.error(
-      '[clash-exporter] CONNECTION_DETAIL_MODE unset but NYKMA_* and CLASH_ENABLE_PER_CONN are both true; using full',
-    )
-  }
-  if (fullLegacy) return 'full'
-  if (compactLegacy) return 'compact'
-  return 'default'
-}
-
-const CONNECTION_DETAIL_MODE = resolveConnectionDetailMode()
 
 const api = createApiClient({
   clashHost: CLASH_HOST,
@@ -113,6 +84,14 @@ const clashActiveConnections = new client.Gauge({
   registers: [register],
 })
 
+const clashConnectionBytesTotal = new client.Gauge({
+  name: 'clash_connection_bytes_total',
+  help:
+    'Cumulative upload and download bytes from /connections per-connection deltas, by source, policy (chain first hop), and type.',
+  labelNames: ['source', 'policy', 'type'],
+  registers: [register],
+})
+
 const clashNetworkTrafficBytesTotal = new client.Counter({
   name: 'clash_network_traffic_bytes_total',
   help:
@@ -141,15 +120,8 @@ const extended = createClashExtendedMetrics(register, {
   prefix: METRIC_PREFIX,
   api,
   enableSpeed: CLASH_ENABLE_SPEED,
-  connectionDetailMode: CONNECTION_DETAIL_MODE,
-  fullDetailInstanceName: NYKMA_PROXY_NAME,
   enableProxyLatency: CLASH_ENABLE_LATENCY,
   latencyIntervalMs: CLASH_LATENCY_MS,
-  proxiesPollMs: CLASH_PROXIES_MS,
-  enableTrafficByDims: ENABLE_TRAFFIC_BY_DIMS,
-  trafficBySkipDirect: TRAFFIC_BY_SKIP_DIRECT,
-  trafficByLabelIdleMs: TRAFFIC_BY_LABEL_IDLE_MS,
-  trafficByLabelCleanupMs: TRAFFIC_BY_LABEL_CLEANUP_MS,
 })
 
 function processClashSnapshot(msg) {
@@ -175,11 +147,13 @@ function processClashSnapshot(msg) {
       clashNetworkTrafficBytesTotal
         .labels(source, dest, policy, 'download')
         .inc(dDl)
+      clashConnectionBytesTotal.labels(source, policy, 'download').inc(dDl)
     }
     if (dUl > 0) {
       clashNetworkTrafficBytesTotal
         .labels(source, dest, policy, 'upload')
         .inc(dUl)
+      clashConnectionBytesTotal.labels(source, policy, 'upload').inc(dUl)
     }
 
     connectionCache.set(c.id, {
@@ -193,9 +167,79 @@ function processClashSnapshot(msg) {
   }
 }
 
-function processSnapshot(msg) {
-  processClashSnapshot(msg)
-  extended.onConnectionsMessage(msg)
+/** Currently exported `clash_info` labels; used so we can replace without leaving stale series. */
+let clashInfoActive = /** @type {[string, string] | null} */ (null)
+
+function applyClashInfo(versionRaw, premiumRaw) {
+  const ver = String(versionRaw ?? 'unknown')
+  const prem = String(premiumRaw ?? false)
+  if (clashInfoActive && clashInfoActive[0] === ver && clashInfoActive[1] === prem) {
+    return
+  }
+  if (clashInfoActive) {
+    try {
+      clashInfo.remove(...clashInfoActive)
+    } catch {
+      /* Child may already be absent. */
+    }
+  }
+  clashInfo.labels(ver, prem).set(1)
+  clashInfoActive = [ver, prem]
+}
+
+async function refreshClashInfoFromApi() {
+  try {
+    const v = await api.jsonRequest('/version')
+    applyClashInfo(v.version ?? 'unknown', v.premium ?? false)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function waitForClashVersionBeforeListen() {
+  let delayMs = 1_000
+  const maxDelayMs = 60_000
+
+  let wakeBackoffNow = false
+  /** @type {import('node:readline').Interface | null} */
+  let rlWake = null
+
+  if (process.stdin.isTTY) {
+    rlWake = readline.createInterface({
+      input: process.stdin,
+      terminal: process.stdin.isTTY,
+    })
+    rlWake.on('line', () => {
+      wakeBackoffNow = true
+    })
+    console.error(
+      '[clash-exporter] 等待外控 /version 期间可随时按 Enter 跳过间隔、立即再试一次',
+    )
+  }
+
+  try {
+    for (;;) {
+      try {
+        const v = await api.jsonRequest('/version')
+        applyClashInfo(v.version ?? 'unknown', v.premium ?? false)
+        console.error(`[clash-exporter] controller ready; starting HTTP :${PORT}`)
+        return
+      } catch (e) {
+        logErr('[clash-exporter] waiting for controller /version:', String(e?.message ?? e))
+        const woke = await sleepBackoffOrWakeHint(delayMs, () => wakeBackoffNow)
+        if (woke) {
+          wakeBackoffNow = false
+          logErr('[clash-exporter] 收到 Enter → 立即重试 /version')
+          delayMs = 1_000
+        } else {
+          delayMs = Math.min(delayMs * 2, maxDelayMs)
+        }
+      }
+    }
+  } finally {
+    rlWake?.close()
+  }
 }
 
 function startConnectionsLoop() {
@@ -207,11 +251,15 @@ function startConnectionsLoop() {
     if (stopped) return
     ws = api.createWs('/connections')
 
+    ws.on('open', () => {
+      void refreshClashInfoFromApi()
+    })
+
     ws.on('message', (data, isBinary) => {
       retryMs = 1_000
       const text = isBinary ? data.toString('utf8') : data.toString()
       try {
-        processSnapshot(JSON.parse(text))
+        processClashSnapshot(JSON.parse(text))
       } catch {
         /* ignore malformed frame */
       }
@@ -244,20 +292,22 @@ function startConnectionsLoop() {
   }
 }
 
-async function bootstrapVersion() {
-  try {
-    const v = await api.jsonRequest('/version')
-    clashInfo
-      .labels(String(v.version ?? 'unknown'), String(v.premium ?? false))
-      .set(1)
-  } catch (e) {
-    clashInfo.labels('unknown', 'false').set(1)
-    console.error('[clash-exporter] version fetch failed:', e.message)
-  }
+let stopExtended = () => {}
+let stopWs = () => {}
+
+function shutdown() {
+  stopWs()
+  stopExtended()
+  process.exit(0)
 }
 
-const stopExtended = extended.start()
-const stopWs = startConnectionsLoop()
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)
+
+await waitForClashVersionBeforeListen()
+
+stopExtended = extended.start()
+stopWs = startConnectionsLoop()
 
 http
   .createServer(async (req, res) => {
@@ -276,16 +326,6 @@ http
   })
   .listen(PORT, () => {
     console.error(
-      `[clash-exporter] :${PORT} /metrics | clash_* + ${METRIC_PREFIX}_* + clash_traffic_by_* | conn_detail=${CONNECTION_DETAIL_MODE} | pipe=${CLASH_HOST ? 'off' : PIPE_PATH} tcp=${CLASH_HOST || '—'}`,
+      `[clash-exporter] listening :${PORT} /metrics | clash_* + ${METRIC_PREFIX}_* | pipe=${CLASH_HOST ? 'off' : PIPE_PATH} tcp=${CLASH_HOST || '—'}`,
     )
   })
-
-await bootstrapVersion()
-
-function shutdown() {
-  stopWs()
-  stopExtended()
-  process.exit(0)
-}
-process.on('SIGINT', shutdown)
-process.on('SIGTERM', shutdown)

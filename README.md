@@ -1,87 +1,81 @@
 # clash-exporter
 
-> **Clash / Clash Meta** 的 Prometheus 导出器：把外接 API 上的连接与流量变成可抓取的标准指标。
+面向 **Clash / Clash Meta** 的 Prometheus 导出器：**先** **`GET /version`** 成功（确认外控可用），**再** 监听 HTTP 提供 **`/metrics`**；之后 **`/connections`**（WebSocket）、**`/traffic`** 等。每次 **`/connections` 握手成功** 会再拉一次 **`/version`** 刷新 `clash_info`。
 
 ---
 
-## 它是做什么的
+## 运行
 
-程序起一个轻量 HTTP 服务，对外提供 **`/metrics`**（基于 `prom-client`）。数据来自控制器的实时连接视图等能力。
-
-- **未设置 `CLASH_HOST`**：通过 **Windows 命名管道** 访问控制器（默认 `\\.\pipe\verge-mihomo`，具体名称以 Clash Verge 等客户端为准）。
-- **已设置 `CLASH_HOST`**：通过 **TCP**（`host:port`）访问外控；可配合 **`CLASH_TOKEN`**。
-
----
-
-## 怎么用
-
-### 本地运行
-
-需要 **Node.js 18+**。在仓库根目录：
-
-```bash
-npm install
-npm start
-```
+需 **Node.js 18+**（本仓库 **`Dockerfile`** 镜像为 Node 22）。根目录执行 `npm install` 后 `npm start`（等同 `node server.mjs`）。
 
 | 地址 | 说明 |
 |------|------|
-| `http://127.0.0.1:2112/metrics` | Prometheus 文本指标 |
-| `/`、`/health` | 健康检查，返回 `ok` |
+| `http://127.0.0.1:2112/metrics` | 指标文本（**仅在** 已与 Clash 通了 **`/version` 之后** 才监听端口） |
+| `/`、`/health` | 返回 `ok`（**同上**，`/version` 未成功前端口未打开） |
 
-外控走 TCP 时，设置环境变量，例如：
+- **未设置 `CLASH_HOST`**：走 **Windows 命名管道**（默认 `\\.\pipe\verge-mihomo`，以实际客户端为准）。控制器若配置了 **`secret`**，请同样设置 **`CLASH_TOKEN`**（与 TCP 一致：`Authorization: Bearer …`，WebSocket 会带 `token` 查询参数）。
+- **设置了 `CLASH_HOST`**：TCP `host:port`，可选 **`CLASH_TOKEN`**（外控 `secret`）。
+- **等待 `/version`**：在交互式终端（`stdin` 为 TTY）运行时，可随时 **按 Enter** 跳过当前退避间隔、**立刻再请求**一次 `/version`。非 TTY（如 Docker 无 `-it`）则只有定时退避。
 
-```bash
-export CLASH_HOST=127.0.0.1:9090
-# export CLASH_TOKEN=…   # 若外控启用了密钥
-```
-
-### 接入 Prometheus
-
-在 `scrape_configs` 里把 `targets` 指到导出器（默认端口 **2112**，可按 `PORT` 修改）。
-
-### Docker 与监控栈
-
-根目录提供 **`Dockerfile`**、**`docker-compose.yml`**（Exporter + Prometheus + Grafana）。先复制 **`.env.example`** 为 **`.env`**，按需改外控地址，再执行：
-
-```bash
-docker compose up -d
-```
-
-若 **Exporter 跑在 Windows 本机**、监控栈跑在容器里，请合并 **`docker-compose.windows.yml`**，并把 **`.env.windows.example`** 中的 **`PROMETHEUS_CONFIG_FILE`** 写进 **`.env`**，以便容器内 Prometheus 能抓到本机 Exporter。
-
-### 更多配置
-
-指标前缀、连接明细档位、`clash_traffic_by_*`、代理延迟等开关，见 **`server.mjs`** 顶部的环境变量说明与源码注释；此处不逐一罗列。
+**Docker / 监控栈**：`docker-compose.yml`；若 Exporter 在本机、Prom 在容器里，合并 **`docker-compose.windows.yml`**，并把 **`.env.windows.example`** 里的变量并到 **`.env`**。本仓库另有 **`start-docker-stack.bat`**、`destroy-docker-stack.bat`（Compose 带卷拆除）可辅助 Windows 环境。
 
 ---
 
-## 参与开发
+## 常用环境变量
 
-1. **拉代码并装依赖**  
-   `git clone` 后在仓库根目录执行 `npm install`。
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `PORT` | `2112` | HTTP 端口 |
+| `CLASH_HOST` / `CLASH_TOKEN` / `CLASH_PIPE` | 见上 | 控制器访问方式；**`CLASH_TOKEN`** 在 **管道与 TCP** 下均表示外控 **`secret`** |
+| `COLLECT_DEST` | 启用 | 为 `false` 时 **`clash_network_traffic_bytes_total` 的 `destination` 恒为空** |
+| `METRIC_PREFIX` | `clash` | 扩展指标名前缀（下称 `{prefix}`） |
+| `CLASH_ENABLE_SPEED` | 开 | `false` 关闭 `{prefix}_traffic_*_speed_bytes`（`/traffic` WS） |
+| `CLASH_ENABLE_PROXY_LATENCY` 或 `CLASH_ENABLE_PROXY_DELAY` | 关 | 为 `true` 时启用 `{prefix}_proxy_latency_ms`、`_proxy_available` |
+| `CLASH_LATENCY_INTERVAL_MS` | `60000` | 代理延迟探测周期（毫秒），仅在上两项为 `true` 时生效 |
 
-2. **日常调试**  
-   使用 `npm start` 或 `node server.mjs`。主要代码路径：
-   - **`server.mjs`** — 核心 Gauge/Counter、`/connections` 主循环  
-   - **`lib/api-client.mjs`** — HTTP、WebSocket、命名管道  
-   - **`lib/clash-extended.mjs`** — 扩展指标与按维度统计  
+其余与部署相关的说明见 **`server.mjs` 文件头注释** 与 Compose 注释。
 
-3. **联调**  
-   本机启用 Clash 外控后，配置管道或 `CLASH_HOST`，用浏览器或 `curl` 访问 `http://127.0.0.1:2112/metrics` 验证输出。
+---
+
+## 核心指标 `clash_*`（无前缀）
+
+- **`clash_info`**：**在与外控 **`GET /version`** **首次成功后**写入；**`/connections`** 每次握手成功再拉一次。**未**连上 Clash 时进程会**阻塞并重试**，此时 **不** 监听 **`PORT`**，故无 **`/metrics`** / **`/health`**。不会出现仅作占位用的 **`unknown`** 标签（除非 API 真返回该 `version` 字符串）。
+- **本节表中除 `clash_info` 外的指标**：来自 **`/connections` WebSocket** 快照流（与各连接的 `upload` / `download` 差分）。
+
+| 指标 | 类型 | 标签 | 含义 |
+|------|------|------|------|
+| `clash_info` | Gauge | `version`, `premium` | 核心版本（非连接流） |
+| `clash_download_bytes_total` | Gauge | — | **控制器整场会话**累计下载 |
+| `clash_upload_bytes_total` | Gauge | — | **控制器整场会话**累计上传 |
+| `clash_active_connections` | Gauge | — | 当前快照中的活跃连接数 |
+| `clash_network_traffic_bytes_total` | Counter | `source`, `destination`, `policy`, `type` | 同上差分记入 Counter；多分一维 **`destination`**（可按 `COLLECT_DEST` 置空）；`policy`=链首跳，`type`=`upload`\|`download`。 |
+| `clash_connection_bytes_total` | Gauge | `source`, `policy`, `type` | **同一套连接差分的累计**（**含 `DIRECT`**），不按 `destination` 拆维；从 **本 exporter 进程启动**起对各标签 **`inc`**（重启归零）；`type`=`upload`\|`download`。 |
+
+会话 Gauge 为控制器总账本；**Counter / 本条** 仅覆盖快照里可走差分的连接，与总会话量可能不一致。
 
 ---
 
-## 实现原理（简述）
+## 扩展指标
 
-| 步骤 | 说明 |
-|------|------|
-| **订阅快照** | 与控制器建立 **`/connections` WebSocket**，持续解析 JSON 快照；每条连接带有累计上下行字节等字段。 |
-| **会话 Gauge** | 用快照中的 **`uploadTotal` / `downloadTotal`** 和**连接条数**更新 **`clash_*` Gauge**（含活跃连接数）。 |
-| **流量 Counter** | 在内存中保留上一帧各连接的上下行字节，与当前帧作差，将正增量记入 **`clash_network_traffic_bytes_total`**（含 source、destination、policy、方向等标签）。 |
-| **可选能力** | 另开 WS 读 **`/traffic`** 得速率；轮询 **`/proxies`** 解析出站与代理延迟；在 **`clash-extended.mjs`** 中维护 **`clash_traffic_by_*`** 等按维度的 Counter。 |
-| **暴露指标** | 将 `prom-client` 的 Registry 挂到 HTTP，响应 **`GET /metrics`**。 |
+- **`{prefix}_traffic_{upload,download}_speed_bytes`**：`CLASH_ENABLE_SPEED` 时，`/traffic` WS。
+- **`{prefix}_proxy_latency_ms` / `{prefix}_proxy_available`**：`CLASH_ENABLE_PROXY_LATENCY`（或 `_PROXY_DELAY`）为 `true`；按 **`CLASH_LATENCY_INTERVAL_MS`**（默认 60s）探测。
+
+按连接的字节累计：**`server.mjs`**（**`clash_network_traffic_bytes_total`** / **`clash_connection_bytes_total`**）。**`lib/clash-extended.mjs`** 仅实现 **`{prefix}_traffic_*_speed_bytes`** 与 **`{prefix}_proxy_*`**。
 
 ---
+
+## PromQL 提示
+
+- **Gauge**（会话 **`clash_{upload,download}_bytes_total`**、**`clash_connection_bytes_total`**、活跃连接数）：看瞬时或序列，**勿对 Gauge 用 `rate()`**。
+- **Counter**（`clash_network_traffic_bytes_total`）：**`increase(...[$__range])`**、**`rate(...[5m])`**。
+- **连接累计总和（示例 Overview）**：`sum(clash_connection_bytes_total{...})`，与大盘 `source`/`policy`/`type` 变量一致即可。
+
+示例大盘：**`deploy/grafana/dashboards/clash-dashboard.json`**。
+
+---
+
+## 开发
+
+主要路径：`server.mjs`（核心）、`lib/api-client.mjs`、`lib/clash-extended.mjs`。
 
 许可证与仓库根目录一致。

@@ -34,6 +34,7 @@ services:
     environment:
       CLASH_HOST: ${CLASH_HOST:-host.docker.internal:9090}
       CLASH_TOKEN: ${CLASH_TOKEN:-}
+      # 可选：COLLECT_DEST、METRIC_PREFIX、CLASH_ENABLE_SPEED、CLASH_ENABLE_PROXY_LATENCY、CLASH_LATENCY_INTERVAL_MS（见 README）
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2112/health"]
